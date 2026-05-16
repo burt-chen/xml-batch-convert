@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.spec
+config.json
+config_default.json
+*.xml
+*.csv
+*.xlsx
+xml/
