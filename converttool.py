@@ -300,34 +300,20 @@ class App:
 
     # ---- UI ----
     def _build_ui(self):
-        # 頂部標題列
-        header = tk.Frame(self.root, bg="#3c4a55", height=64)
-        header.pack(fill="x")
-        header.pack_propagate(False)
-        tk.Label(
-            header, text="XML 批次轉換工具", bg="#3c4a55", fg="white",
-            font=("Microsoft JhengHei UI", 18, "bold"),
-        ).pack(side="left", padx=24)
-        tk.Button(
-            header, text="說明", bg="#5a6a75", fg="white",
-            activebackground="#7a8a95", activeforeground="white",
-            relief="flat", borderwidth=0, cursor="hand2",
-            font=("Microsoft JhengHei UI", 10),
-            padx=12, pady=2,
-            command=self._open_help,
-        ).pack(side="right", padx=(0, 24), pady=18)
-
         # 頁簽
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=(8, 4))
 
         self.tab_convert = ttk.Frame(self.notebook)
         self.tab_config = ttk.Frame(self.notebook)
+        self.tab_help = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_convert, text="CSV產生XML")
         self.notebook.add(self.tab_config, text="設定檔")
+        self.notebook.add(self.tab_help, text="說明")
 
         self._build_convert_tab()
         self._build_config_tab()
+        self._build_help_tab()
 
         # 底部狀態列
         self.status_var = tk.StringVar(value="就緒")
@@ -535,9 +521,6 @@ class App:
             messagebox.showerror("錯誤", f"寫入失敗: {e}")
             return
         messagebox.showinfo("完成", f"預設設定已下載至:\n{p}")
-
-    def _show_help(self):
-        HelpDialog(self.root)
 
     def _save_from_editor(self, new_cfg):
         """ConfigEditor 呼叫的儲存入口 (含驗證 + 寫檔)。失敗只在狀態列顯示,不彈窗。"""
@@ -778,8 +761,36 @@ class App:
         self.status_var.set(summary)
         messagebox.showinfo("執行結果", summary)
 
-    def _open_help(self):
-        HelpDialog(self.root)
+    def _build_help_tab(self):
+        body = tk.Frame(self.tab_help)
+        body.pack(fill="both", expand=True, padx=14, pady=10)
+        txt = tk.Text(body, wrap="word", font=("Microsoft JhengHei UI", 10),
+                      padx=10, pady=10, relief="flat", bg="#fafafa")
+        ys = ttk.Scrollbar(body, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=ys.set)
+        ys.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+
+        txt.tag_configure("h1", font=("Microsoft JhengHei UI", 13, "bold"),
+                          foreground="#1a3d5c", spacing1=12, spacing3=6)
+        txt.tag_configure("h2", font=("Microsoft JhengHei UI", 11, "bold"),
+                          foreground="#333333", spacing1=8, spacing3=4)
+        txt.tag_configure("p", spacing1=2, spacing3=4, lmargin1=8, lmargin2=8)
+        txt.tag_configure("li", spacing1=1, spacing3=2, lmargin1=20, lmargin2=36)
+        txt.tag_configure("code", font=("Consolas", 10), background="#eef2f6",
+                          spacing1=4, spacing3=8, lmargin1=20, lmargin2=20,
+                          rmargin=20)
+        txt.tag_configure("note", font=("Microsoft JhengHei UI", 10, "italic"),
+                          foreground="#8a4500", background="#fff5e6",
+                          spacing1=4, spacing3=8, lmargin1=12, lmargin2=12,
+                          rmargin=12)
+
+        for tag, content in HELP_TEXT:
+            if tag == "li":
+                txt.insert("end", "・" + content + "\n", "li")
+            else:
+                txt.insert("end", content + "\n", tag)
+        txt.configure(state="disabled")
 
 
 # ---------- 結構化編輯器 ----------
@@ -1171,7 +1182,7 @@ class RuleDialog(tk.Toplevel):
         self.destroy()
 
 
-# ---------- 使用說明視窗 ----------
+# ---------- 使用說明內容 ----------
 
 HELP_TEXT = [
     ("h1", "1. 匯出檔名規則"),
@@ -1218,64 +1229,6 @@ HELP_TEXT = [
     ("li", "✗ 失敗或檔名重複"),
     ("li", "略過 — 該列資料不完整或檔名為空"),
 ]
-
-
-class HelpDialog(tk.Toplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("使用說明")
-        self.geometry("760x620")
-        self.transient(parent)
-        self.grab_set()
-
-        # 標題列
-        header = tk.Frame(self, bg="#3c4a55", height=48)
-        header.pack(fill="x")
-        header.pack_propagate(False)
-        tk.Label(
-            header, text="使用說明", bg="#3c4a55", fg="white",
-            font=("Microsoft JhengHei UI", 14, "bold"),
-        ).pack(side="left", padx=20)
-
-        # 內文
-        body = tk.Frame(self)
-        body.pack(fill="both", expand=True, padx=14, pady=10)
-        txt = tk.Text(body, wrap="word", font=("Microsoft JhengHei UI", 10),
-                      padx=10, pady=10, relief="flat", bg="#fafafa")
-        ys = ttk.Scrollbar(body, orient="vertical", command=txt.yview)
-        txt.configure(yscrollcommand=ys.set)
-        ys.pack(side="right", fill="y")
-        txt.pack(side="left", fill="both", expand=True)
-
-        # 樣式 tag
-        txt.tag_configure("h1", font=("Microsoft JhengHei UI", 13, "bold"),
-                          foreground="#1a3d5c", spacing1=12, spacing3=6)
-        txt.tag_configure("h2", font=("Microsoft JhengHei UI", 11, "bold"),
-                          foreground="#333333", spacing1=8, spacing3=4)
-        txt.tag_configure("p", spacing1=2, spacing3=4, lmargin1=8, lmargin2=8)
-        txt.tag_configure("li", spacing1=1, spacing3=2, lmargin1=20, lmargin2=36)
-        txt.tag_configure("code", font=("Consolas", 10), background="#eef2f6",
-                          spacing1=4, spacing3=8, lmargin1=20, lmargin2=20,
-                          rmargin=20)
-        txt.tag_configure("note", font=("Microsoft JhengHei UI", 10, "italic"),
-                          foreground="#8a4500", background="#fff5e6",
-                          spacing1=4, spacing3=8, lmargin1=12, lmargin2=12,
-                          rmargin=12)
-
-        for tag, content in HELP_TEXT:
-            if tag == "li":
-                txt.insert("end", "・" + content + "\n", "li")
-            elif tag == "note":
-                txt.insert("end", "💡 " + content + "\n", "note")
-            else:
-                txt.insert("end", content + "\n", tag)
-
-        txt.configure(state="disabled")
-
-        # 關閉按鈕
-        bar = ttk.Frame(self)
-        bar.pack(fill="x", padx=14, pady=(0, 12))
-        ttk.Button(bar, text="關閉", command=self.destroy).pack(side="right")
 
 
 def main():
