@@ -1,4 +1,4 @@
-# XML 批次轉換工具 v2.0
+# XML 批次轉換工具 (xml-batch-convert)
 
 把 CSV 對應表的每一列資料,套用到一個**範例 XML** 上,批次產生多個 XML 檔。輸出檔名由 [config.json](config.json) 的「匯出檔名規則」決定。
 
@@ -8,30 +8,22 @@
 
 ## 執行方式
 
-### 方式 A:Python 原始碼
+**透過 MyTools Launcher**(建議):在 launcher 工具清單安裝後直接開啟。
 
-需要 Python 3.8+(內建 tkinter,Windows 版預設就有)。
+**獨立執行**:需要 Python 3.8+(內建 tkinter,Windows 版預設就有)。
 
 ```powershell
-py converttool.py
+python converttool.py
 ```
 
-首次執行會自動在程式所在資料夾建立 [config.json](config.json)(預設值)。
-
-### 方式 B:打包好的 .exe(Windows)
-
-把 [dist/XML批次轉換工具.exe](dist/XML批次轉換工具.exe) 複製到任意資料夾,雙擊即可。第一次啟動會在 .exe 旁建立 `config.json`。
-
-> 重新打包指令:
-> ```powershell
-> py -m PyInstaller --onefile --windowed --name "XML批次轉換工具" --clean --noconfirm converttool.py
-> ```
+首次執行會自動建立 `config.json`(預設值)。獨立執行時放程式所在資料夾;
+透過 launcher 執行時放使用者家目錄(`.xml_batch_convert_config.json`)。
 
 ---
 
 ## 介面結構
 
-頂部是深色標題列(右上角有 **? 說明** 按鈕,所有頁籤通用)。下方兩個頁籤:
+三個頁籤:
 
 ### 頁籤 1:CSV 產生 XML
 
@@ -65,6 +57,10 @@ py converttool.py
    - 狀態列(✓ 已載入 / ✓ 已自動儲存 / ⚠ 驗證失敗 / ✗ 寫入失敗)
 2. **重新載入** / **下載預設設定**
 3. **內嵌的設定編輯器**(三個子頁籤,以下說明)
+
+### 頁籤 3:說明
+
+工具使用說明(本文件的精簡版)。
 
 ---
 
@@ -265,8 +261,9 @@ A: 縮排會直接沿用範例 XML 該行原本的空白。檢查範例該行開
 **Q: 想恢復成預設設定?**
 A: 點「下載預設設定」存到目前 `config.json` 路徑(會詢問確認覆蓋),或先存到別處比對後再決定。
 
-**Q: PyInstaller 打包後 config.json 跑去哪?**
-A: 在 .exe 旁邊。程式用 `sys.executable` 算路徑,不會跑到 PyInstaller 暫存資料夾。
+**Q: config.json 在哪?**
+A: 獨立執行時在程式所在資料夾;透過 MyTools Launcher 執行時在使用者家目錄
+(`.xml_batch_convert_config.json`)。
 
 ---
 
@@ -275,8 +272,6 @@ A: 在 .exe 旁邊。程式用 `sys.executable` 算路徑,不會跑到 PyInstall
 | 檔案 | 用途 |
 |---|---|
 | [converttool.py](converttool.py) | 主程式 |
-| [config.json](config.json) | 設定檔(自動產生 / 自動儲存) |
+| `main_frame.py` | 供 MyTools Launcher 嵌入載入的入口 |
+| `config.json` | 設定檔(自動產生 / 自動儲存) |
 | [README.md](README.md) | 本說明 |
-| [dist/XML批次轉換工具.exe](dist/XML批次轉換工具.exe) | 打包好的執行檔 |
-| [XML批次轉換工具.spec](XML批次轉換工具.spec) | PyInstaller spec(重打包用) |
-| build/ | PyInstaller 暫存,可刪 |
