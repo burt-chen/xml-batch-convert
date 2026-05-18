@@ -40,7 +40,16 @@ def rule_type_key(label):
     return label
 
 
+# 內建預設值:空白骨架。首次啟動 / 重設時為空,讓使用者自行建立或匯入範例。
 DEFAULT_CONFIG = {
+    "filename_template": "",
+    "min_required_columns": 1,
+    "mappings": [],
+    "special_rules": [],
+}
+
+# 完整範例設定:供「下載範例設定」按鈕輸出,讓使用者有可直接套用的參考。
+SAMPLE_CONFIG = {
     "filename_template": "{C}",
     "min_required_columns": 1,
     "mappings": [
@@ -63,6 +72,11 @@ DEFAULT_CONFIG = {
         }
     ],
 }
+
+# 範例 CSV / XML 內容直接內嵌 (見檔尾 SAMPLE_CSV_TEXT / SAMPLE_XML_TEXT),
+# 不依賴任何外部實體檔,打包時也不需 .spec datas。
+SAMPLE_CSV_NAME = "CSV對應表範例.csv"
+SAMPLE_XML_NAME = "範例xml.xml"
 
 
 # ---------- 工具函式 ----------
@@ -215,9 +229,11 @@ def migrate_config(cfg):
             try:
                 cfg["filename_template"] = f"{{{index_to_letter(col_to_index(kc))}}}"
             except Exception:
-                cfg["filename_template"] = "{C}"
+                cfg["filename_template"] = ""
         else:
-            cfg["filename_template"] = "{C}"
+            # 無舊版 key_column 時保持空白,讓使用者自行設定;
+            # 轉換前 validate_template 仍會擋下空白檔名格式。
+            cfg["filename_template"] = cfg.get("filename_template", "") or ""
     cfg.pop("key_column", None)
     cfg.pop("key_column_label", None)
     cfg.pop("_description", None)
@@ -233,7 +249,11 @@ def validate_config(cfg):
     for k in ("filename_template", "mappings"):
         if k not in cfg:
             raise ValueError(f"缺少必要欄位: {k}")
-    validate_template(cfg["filename_template"])
+    # 允許空白檔名格式 (空白起始設定);實際轉換時 _convert 會再以
+    # validate_template 擋下,並提示使用者先填寫。
+    tmpl = cfg["filename_template"]
+    if isinstance(tmpl, str) and tmpl.strip():
+        validate_template(tmpl)
     min_cols = cfg.get("min_required_columns", 1)
     if not isinstance(min_cols, int) or min_cols < 1:
         raise ValueError("min_required_columns 必須為正整數")
@@ -306,13 +326,16 @@ class App:
 
         self.tab_convert = ttk.Frame(self.notebook)
         self.tab_config = ttk.Frame(self.notebook)
+        self.tab_samples = ttk.Frame(self.notebook)
         self.tab_help = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_convert, text="CSV產生XML")
         self.notebook.add(self.tab_config, text="設定檔")
+        self.notebook.add(self.tab_samples, text="範例下載")
         self.notebook.add(self.tab_help, text="說明")
 
         self._build_convert_tab()
         self._build_config_tab()
+        self._build_samples_tab()
         self._build_help_tab()
 
         # 底部狀態列
@@ -425,6 +448,47 @@ class App:
         self.editor_container.pack(fill="both", expand=True, padx=12, pady=(6, 12))
         self.editor = None
 
+    def _build_samples_tab(self):
+        frm = self.tab_samples
+
+        intro = tk.Label(
+            frm,
+            text="下載以下範例檔,照著格式準備自己的資料。",
+            anchor="w", justify="left", bg="#f0f0f0", fg="#333",
+            font=("Microsoft JhengHei UI", 10), padx=4, pady=8,
+        )
+        intro.pack(fill="x", padx=16, pady=(14, 4))
+
+        box = ttk.LabelFrame(frm, text="範例檔")
+        box.pack(fill="x", padx=16, pady=6)
+        box.columnconfigure(0, weight=1)
+
+        items = [
+            ("CSV 對應表範例", "每列一筆資料,第一列為欄位名稱。",
+             "下載範例 CSV", self._download_sample_csv),
+            ("範例 XML 模板", "套用對應規則的基礎 XML。",
+             "下載範例 XML", self._download_sample_xml),
+            ("範例設定 (config.json)", "完整欄位對應與特殊規則,可直接匯入參考。",
+             "下載範例設定", self._download_sample_config),
+        ]
+        for i, (title, desc, btn_text, cmd) in enumerate(items):
+            row = ttk.Frame(box)
+            row.grid(row=2 * i, column=0, sticky="ew", padx=10, pady=8)
+            row.columnconfigure(0, weight=1)
+            tk.Label(
+                row, text=title, anchor="w",
+                font=("Microsoft JhengHei UI", 10, "bold"),
+            ).grid(row=0, column=0, sticky="w")
+            tk.Label(
+                row, text=desc, anchor="w", fg="#666",
+                font=("Microsoft JhengHei UI", 9),
+            ).grid(row=1, column=0, sticky="w")
+            ttk.Button(row, text=btn_text, width=16, command=cmd).grid(
+                row=0, column=1, rowspan=2, padx=(12, 4))
+            if i < len(items) - 1:
+                ttk.Separator(box, orient="horizontal").grid(
+                    row=2 * i + 1, column=0, sticky="ew", padx=10)
+
     def _rebuild_editor(self):
         """銷毀並重建編輯器,讓 UI 跟最新的 self.config 同步"""
         if self.editor is not None:
@@ -521,6 +585,57 @@ class App:
             messagebox.showerror("錯誤", f"寫入失敗: {e}")
             return
         messagebox.showinfo("完成", f"預設設定已下載至:\n{p}")
+
+    def _download_sample_config(self):
+        """把完整範例設定 (含 mappings/rules) 另存,供使用者參考或匯入。"""
+        p = filedialog.asksaveasfilename(
+            title="下載範例設定",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("所有檔案", "*.*")],
+            initialdir=str(self.config_path.parent),
+            initialfile="config.json",
+        )
+        if not p:
+            return
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(SAMPLE_CONFIG, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            messagebox.showerror("錯誤", f"寫入失敗: {e}")
+            return
+        messagebox.showinfo("完成", f"範例設定已下載至:\n{p}")
+
+    def _download_text(self, res_name, content, title, ftypes):
+        """把內嵌的範例內容寫到使用者指定位置 (UTF-8, 保留原始換行)。"""
+        suffix = Path(res_name).suffix
+        p = filedialog.asksaveasfilename(
+            title=title,
+            defaultextension=suffix,
+            filetypes=ftypes,
+            initialdir=str(self.config_path.parent),
+            initialfile=res_name,
+        )
+        if not p:
+            return
+        try:
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+        except Exception as e:
+            messagebox.showerror("錯誤", f"寫入失敗: {e}")
+            return
+        messagebox.showinfo("完成", f"範例已下載至:\n{p}")
+
+    def _download_sample_csv(self):
+        self._download_text(
+            SAMPLE_CSV_NAME, SAMPLE_CSV_TEXT, "下載範例 CSV",
+            [("CSV", "*.csv"), ("所有檔案", "*.*")],
+        )
+
+    def _download_sample_xml(self):
+        self._download_text(
+            SAMPLE_XML_NAME, SAMPLE_XML_TEXT, "下載範例 XML",
+            [("XML", "*.xml"), ("所有檔案", "*.*")],
+        )
 
     def _save_from_editor(self, new_cfg):
         """ConfigEditor 呼叫的儲存入口 (含驗證 + 寫檔)。失敗只在狀態列顯示,不彈窗。"""
@@ -856,6 +971,39 @@ class ConfigEditor(ttk.Frame):
         ttk.Entry(f, textvariable=self.var_template, width=40).grid(
             row=0, column=1, sticky="ew", padx=4, pady=(16, 6))
 
+        # 規則說明 (顯示在設定區最下方)
+        help_box = tk.Text(
+            f, wrap="word", height=10, relief="flat", bg="#fafafa",
+            font=("Microsoft JhengHei UI", 10), padx=12, pady=10,
+        )
+        help_box.grid(row=1, column=0, columnspan=2,
+                      sticky="nsew", padx=10, pady=(12, 12))
+        f.rowconfigure(1, weight=1)
+
+        help_box.tag_configure(
+            "h", font=("Microsoft JhengHei UI", 11, "bold"),
+            foreground="#1a3d5c", spacing1=2, spacing3=6)
+        help_box.tag_configure("p", spacing3=4)
+        help_box.tag_configure(
+            "code", font=("Consolas", 10), background="#eef2f6",
+            lmargin1=16, lmargin2=16, rmargin=16, spacing1=4, spacing3=8)
+
+        help_box.insert("end", "匯出檔名規則\n", "h")
+        help_box.insert(
+            "end",
+            "用 {A} {B} {C}… 代表 CSV 對應欄位的值,其餘文字原樣保留。\n"
+            "副檔名 .xml 會自動加上。同樣檔名的兩筆資料會被擋下不輸出。\n",
+            "p")
+        help_box.insert("end", "範例\n", "h")
+        help_box.insert(
+            "end",
+            "{C}            →  C欄值.xml\n"
+            "XML_{C}        →  XML_C欄值.xml\n"
+            "{C}_{A}        →  C欄值_A欄值.xml\n"
+            "114年_{C}_v1   →  114年_C欄值_v1.xml",
+            "code")
+        help_box.configure(state="disabled")
+
         # 保留 min_required_columns,儲存時帶回去
         self._kept_min_cols = self.cfg.get("min_required_columns", 1)
 
@@ -1188,10 +1336,10 @@ HELP_TEXT = [
     ("h1", "1. 匯出檔名規則"),
     ("p",  "用 {A} {B} {C}… 代表 CSV 對應欄位的值,其餘文字原樣保留。\n副檔名 .xml 會自動加上。同樣檔名的兩筆資料會被擋下不輸出。"),
     ("h2", "範例"),
-    ("code", "{C}            →  圖號.xml\n"
-            "XML_{C}        →  XML_圖號.xml\n"
-            "{C}_{A}        →  圖號_A欄值.xml\n"
-            "114年_{C}_v1   →  114年_圖號_v1.xml"),
+    ("code", "{C}            →  C欄值.xml\n"
+            "XML_{C}        →  XML_C欄值.xml\n"
+            "{C}_{A}        →  C欄值_A欄值.xml\n"
+            "114年_{C}_v1   →  114年_C欄值_v1.xml"),
 
     ("h1", "2. 欄位對應 (mappings)"),
     ("p",  "把 CSV 某欄的值套到範例 XML 指定行號。每條規則 4 個欄位:"),
@@ -1229,6 +1377,662 @@ HELP_TEXT = [
     ("li", "✗ 失敗或檔名重複"),
     ("li", "略過 — 該列資料不完整或檔名為空"),
 ]
+
+
+# ---------- 內嵌範例檔內容 (供「範例下載」分頁輸出) ----------
+
+SAMPLE_CSV_TEXT = (
+    "識別碼,名稱,圖號,Town,圖名,西W,東E,南S,北N\n"
+    "95181001_114LU,國土利用現況調查_95181001_登知來(四),95181001,高雄市茂林區,登知來(四),120.75806,120.78306,22.97333,22.99833\n"
+    "95181002_114LU,國土利用現況調查_95181002_登知來(一),95181002,高雄市桃源區,,120.78306,120.80806,22.97333,22.99833\n"
+)
+
+SAMPLE_XML_TEXT = """<?xml version="1.0" encoding="UTF-8"?>
+<gmd:MD_Metadata xmlns:gmd="http://www.isotc211.org/2005/gmd" xmlns:gco="http://www.isotc211.org/2005/gco" xmlns:gml="http://www.opengis.net/gml" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.isotc211.org/2005/gmd http://www.isotc211.org/2005/gmd/metadataEntity.xsd">
+  <!--@twsmp:{"description":"","excludedChildren":[],"hint":"","mustHandleChildren":[],"questionInfo":null,"template":-1}-->
+  <gmd:fileIdentifier>
+    <gco:CharacterString>96201001_114LU</gco:CharacterString>
+  </gmd:fileIdentifier>
+  <gmd:language>
+    <gco:CharacterString>chi</gco:CharacterString>
+  </gmd:language>
+  <gmd:characterSet>
+    <gmd:MD_CharacterSetCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_CharacterSetCode" codeListValue="utf8" codeSpace="ISOTC211/19115">utf8</gmd:MD_CharacterSetCode>
+  </gmd:characterSet>
+  <gmd:hierarchyLevel>
+    <gmd:MD_ScopeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_ScopeCode" codeListValue="dataset" codeSpace="ISOTC211/19115">dataset</gmd:MD_ScopeCode>
+  </gmd:hierarchyLevel>
+  <gmd:contact xlink:type="simple">
+    <gmd:CI_ResponsibleParty>
+      <gmd:organisationName>
+        <gco:CharacterString>內政部國土測繪中心基本圖資測製科</gco:CharacterString>
+      </gmd:organisationName>
+      <gmd:contactInfo xlink:type="simple">
+        <gmd:CI_Contact>
+          <gmd:phone xlink:type="simple">
+            <gmd:CI_Telephone>
+              <gmd:voice>
+                <gco:CharacterString>+886-4-22522966</gco:CharacterString>
+              </gmd:voice>
+              <gmd:facsimile>
+                <gco:CharacterString>+886-4-22592273</gco:CharacterString>
+              </gmd:facsimile>
+            </gmd:CI_Telephone>
+          </gmd:phone>
+          <gmd:address xlink:type="simple">
+            <gmd:CI_Address>
+              <gmd:deliveryPoint>
+                <gco:CharacterString>黎明路二段４９７號四樓</gco:CharacterString>
+              </gmd:deliveryPoint>
+              <gmd:city>
+                <gco:CharacterString>臺中市南屯區</gco:CharacterString>
+              </gmd:city>
+              <gmd:postalCode>
+                <gco:CharacterString>408281</gco:CharacterString>
+              </gmd:postalCode>
+              <gmd:country>
+                <gco:CharacterString>中華民國</gco:CharacterString>
+              </gmd:country>
+              <gmd:electronicMailAddress>
+                <gco:CharacterString>m3@mail.nlsc.gov.tw</gco:CharacterString>
+              </gmd:electronicMailAddress>
+            </gmd:CI_Address>
+          </gmd:address>
+        </gmd:CI_Contact>
+      </gmd:contactInfo>
+      <gmd:role>
+        <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="custodian" codeSpace="ISOTC211/19115">custodian</gmd:CI_RoleCode>
+      </gmd:role>
+    </gmd:CI_ResponsibleParty>
+  </gmd:contact>
+  <gmd:contact xlink:type="simple">
+    <gmd:CI_ResponsibleParty>
+      <gmd:organisationName>
+        <gco:CharacterString>內政部國土測繪中心圖資供應管理科</gco:CharacterString>
+      </gmd:organisationName>
+      <gmd:contactInfo xlink:type="simple">
+        <gmd:CI_Contact>
+          <gmd:phone xlink:type="simple">
+            <gmd:CI_Telephone>
+              <gmd:voice>
+                <gco:CharacterString>+886-4-22522966</gco:CharacterString>
+              </gmd:voice>
+              <gmd:facsimile>
+                <gco:CharacterString>+886-4-22514536</gco:CharacterString>
+              </gmd:facsimile>
+            </gmd:CI_Telephone>
+          </gmd:phone>
+          <gmd:address xlink:type="simple">
+            <gmd:CI_Address>
+              <gmd:deliveryPoint>
+                <gco:CharacterString>黎明路二段４９７號四樓</gco:CharacterString>
+              </gmd:deliveryPoint>
+              <gmd:city>
+                <gco:CharacterString>臺中市南屯區</gco:CharacterString>
+              </gmd:city>
+              <gmd:postalCode>
+                <gco:CharacterString>408281</gco:CharacterString>
+              </gmd:postalCode>
+              <gmd:country>
+                <gco:CharacterString>中華民國</gco:CharacterString>
+              </gmd:country>
+              <gmd:electronicMailAddress>
+                <gco:CharacterString>m5@mail.nlsc.gov.tw</gco:CharacterString>
+              </gmd:electronicMailAddress>
+            </gmd:CI_Address>
+          </gmd:address>
+        </gmd:CI_Contact>
+      </gmd:contactInfo>
+      <gmd:role>
+        <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="distributor" codeSpace="ISOTC211/19115">distributor</gmd:CI_RoleCode>
+      </gmd:role>
+    </gmd:CI_ResponsibleParty>
+  </gmd:contact>
+  <gmd:contact xlink:type="simple">
+    <gmd:CI_ResponsibleParty>
+      <gmd:organisationName>
+        <gco:CharacterString>群立科技股份有限公司</gco:CharacterString>
+      </gmd:organisationName>
+      <gmd:contactInfo xlink:type="simple">
+        <gmd:CI_Contact>
+          <gmd:phone xlink:type="simple">
+            <gmd:CI_Telephone>
+              <gmd:voice>
+                <gco:CharacterString>+886-4-27078899</gco:CharacterString>
+              </gmd:voice>
+              <gmd:facsimile>
+                <gco:CharacterString>+886-4-27062899</gco:CharacterString>
+              </gmd:facsimile>
+            </gmd:CI_Telephone>
+          </gmd:phone>
+          <gmd:address xlink:type="simple">
+            <gmd:CI_Address>
+              <gmd:deliveryPoint>
+                <gco:CharacterString>臺灣大道三段５４０號七樓之５</gco:CharacterString>
+              </gmd:deliveryPoint>
+              <gmd:city>
+                <gco:CharacterString>臺中市西屯區</gco:CharacterString>
+              </gmd:city>
+              <gmd:postalCode>
+                <gco:CharacterString>407603</gco:CharacterString>
+              </gmd:postalCode>
+              <gmd:country>
+                <gco:CharacterString>中華民國</gco:CharacterString>
+              </gmd:country>
+              <gmd:electronicMailAddress>
+                <gco:CharacterString>service@geoforce.com.tw</gco:CharacterString>
+              </gmd:electronicMailAddress>
+            </gmd:CI_Address>
+          </gmd:address>
+        </gmd:CI_Contact>
+      </gmd:contactInfo>
+      <gmd:role>
+        <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="originator" codeSpace="ISOTC211/19115">originator</gmd:CI_RoleCode>
+      </gmd:role>
+    </gmd:CI_ResponsibleParty>
+  </gmd:contact>
+  <gmd:dateStamp>
+    <gco:Date>2025-11-28</gco:Date>
+  </gmd:dateStamp>
+  <gmd:metadataStandardName>
+    <gco:CharacterString>TWSMP</gco:CharacterString>
+  </gmd:metadataStandardName>
+  <gmd:metadataStandardVersion>
+    <gco:CharacterString>2.0</gco:CharacterString>
+  </gmd:metadataStandardVersion>
+  <gmd:spatialRepresentationInfo xlink:type="simple">
+    <gmd:MD_VectorSpatialRepresentation>
+      <gmd:geometricObjects xlink:type="simple">
+        <gmd:MD_GeometricObjects>
+          <gmd:geometricObjectType>
+            <gmd:MD_GeometricObjectTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_GeometricObjectTypeCode" codeListValue="surface" codeSpace="ISOTC211/19115">surface</gmd:MD_GeometricObjectTypeCode>
+          </gmd:geometricObjectType>
+        </gmd:MD_GeometricObjects>
+      </gmd:geometricObjects>
+    </gmd:MD_VectorSpatialRepresentation>
+  </gmd:spatialRepresentationInfo>
+  <gmd:referenceSystemInfo xlink:type="simple">
+    <gmd:MD_ReferenceSystem>
+      <gmd:referenceSystemIdentifier xlink:type="simple">
+        <gmd:RS_Identifier>
+          <gmd:code>
+            <gco:CharacterString>TWD97(121分帶)</gco:CharacterString>
+          </gmd:code>
+        </gmd:RS_Identifier>
+      </gmd:referenceSystemIdentifier>
+    </gmd:MD_ReferenceSystem>
+  </gmd:referenceSystemInfo>
+  <gmd:identificationInfo xlink:type="simple">
+    <gmd:MD_DataIdentification>
+      <gmd:citation xlink:type="simple">
+        <gmd:CI_Citation>
+          <gmd:title>
+            <gco:CharacterString>國土利用現況調查_96201001_能高山(四)</gco:CharacterString>
+          </gmd:title>
+          <gmd:date xlink:type="simple">
+            <gmd:CI_Date>
+              <gmd:date>
+                <gco:Date>2025-11-28</gco:Date>
+              </gmd:date>
+              <gmd:dateType>
+                <gmd:CI_DateTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_DateTypeCode" codeListValue="creation" codeSpace="ISOTC211/19115">creation</gmd:CI_DateTypeCode>
+              </gmd:dateType>
+            </gmd:CI_Date>
+          </gmd:date>
+          <gmd:date xlink:type="simple">
+            <gmd:CI_Date>
+              <gmd:date>
+                <gco:Date>1900-01-01</gco:Date>
+              </gmd:date>
+              <gmd:dateType>
+                <gmd:CI_DateTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_DateTypeCode" codeListValue="revision" codeSpace="ISOTC211/19115">revision</gmd:CI_DateTypeCode>
+              </gmd:dateType>
+            </gmd:CI_Date>
+          </gmd:date>
+          <gmd:date xlink:type="simple">
+            <gmd:CI_Date>
+              <gmd:date>
+                <gco:Date>1900-01-01</gco:Date>
+              </gmd:date>
+              <gmd:dateType>
+                <gmd:CI_DateTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_DateTypeCode" codeListValue="publication" codeSpace="ISOTC211/19115">publication</gmd:CI_DateTypeCode>
+              </gmd:dateType>
+            </gmd:CI_Date>
+          </gmd:date>
+        </gmd:CI_Citation>
+      </gmd:citation>
+      <gmd:abstract>
+        <gco:CharacterString>內政部國土測繪中心委託群立科技股份有限公司運用航遙測影像內涵豐富資訊，搭配GIS輔助資料及地面調查作業，快速、確實得獲取國土利用現況調查成果。</gco:CharacterString>
+      </gmd:abstract>
+      <gmd:purpose>
+        <gco:CharacterString>隨著全球經濟的蓬勃發展，國內已由農業轉變為工商服務業發展並進的型態，土地利用的變化加快，原有資料已不敷使用；因此，內政部交由國土測繪中心規劃由測量隊自辦及委請廠商運用航遙測影像內涵豐富資訊，搭配GIS輔助資料及地面調查作業，獲取國土利用現況調查成果，提供國土規劃及各項國家政策推動所需基礎資料。</gco:CharacterString>
+      </gmd:purpose>
+      <gmd:status>
+        <gmd:MD_ProgressCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_ProgressCode" codeListValue="completed" codeSpace="ISOTC211/19115">completed</gmd:MD_ProgressCode>
+      </gmd:status>
+      <gmd:pointOfContact xlink:type="simple">
+        <gmd:CI_ResponsibleParty>
+          <gmd:organisationName>
+            <gco:CharacterString>內政部國土測繪中心基本圖資測製科</gco:CharacterString>
+          </gmd:organisationName>
+          <gmd:contactInfo xlink:type="simple">
+            <gmd:CI_Contact>
+              <gmd:phone xlink:type="simple">
+                <gmd:CI_Telephone>
+                  <gmd:voice>
+                    <gco:CharacterString>+886-4-22522966</gco:CharacterString>
+                  </gmd:voice>
+                  <gmd:facsimile>
+                    <gco:CharacterString>+886-4-22592273</gco:CharacterString>
+                  </gmd:facsimile>
+                </gmd:CI_Telephone>
+              </gmd:phone>
+              <gmd:address xlink:type="simple">
+                <gmd:CI_Address>
+                  <gmd:deliveryPoint>
+                    <gco:CharacterString>黎明路二段４９７號四樓</gco:CharacterString>
+                  </gmd:deliveryPoint>
+                  <gmd:city>
+                    <gco:CharacterString>臺中市南屯區</gco:CharacterString>
+                  </gmd:city>
+                  <gmd:postalCode>
+                    <gco:CharacterString>408281</gco:CharacterString>
+                  </gmd:postalCode>
+                  <gmd:country>
+                    <gco:CharacterString>中華民國</gco:CharacterString>
+                  </gmd:country>
+                  <gmd:electronicMailAddress>
+                    <gco:CharacterString>m3@mail.nlsc.gov.tw</gco:CharacterString>
+                  </gmd:electronicMailAddress>
+                </gmd:CI_Address>
+              </gmd:address>
+            </gmd:CI_Contact>
+          </gmd:contactInfo>
+          <gmd:role>
+            <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="custodian" codeSpace="ISOTC211/19115">custodian</gmd:CI_RoleCode>
+          </gmd:role>
+        </gmd:CI_ResponsibleParty>
+      </gmd:pointOfContact>
+      <gmd:pointOfContact xlink:type="simple">
+        <gmd:CI_ResponsibleParty>
+          <gmd:organisationName>
+            <gco:CharacterString>內政部國土測繪中心圖資供應管理科</gco:CharacterString>
+          </gmd:organisationName>
+          <gmd:contactInfo xlink:type="simple">
+            <gmd:CI_Contact>
+              <gmd:phone xlink:type="simple">
+                <gmd:CI_Telephone>
+                  <gmd:voice>
+                    <gco:CharacterString>+886-4-22522966</gco:CharacterString>
+                  </gmd:voice>
+                  <gmd:facsimile>
+                    <gco:CharacterString>+886-4-22514536</gco:CharacterString>
+                  </gmd:facsimile>
+                </gmd:CI_Telephone>
+              </gmd:phone>
+              <gmd:address xlink:type="simple">
+                <gmd:CI_Address>
+                  <gmd:deliveryPoint>
+                    <gco:CharacterString>黎明路二段４９７號四樓</gco:CharacterString>
+                  </gmd:deliveryPoint>
+                  <gmd:city>
+                    <gco:CharacterString>臺中市南屯區</gco:CharacterString>
+                  </gmd:city>
+                  <gmd:postalCode>
+                    <gco:CharacterString>408281</gco:CharacterString>
+                  </gmd:postalCode>
+                  <gmd:country>
+                    <gco:CharacterString>中華民國</gco:CharacterString>
+                  </gmd:country>
+                  <gmd:electronicMailAddress>
+                    <gco:CharacterString>m5@mail.nlsc.gov.tw</gco:CharacterString>
+                  </gmd:electronicMailAddress>
+                </gmd:CI_Address>
+              </gmd:address>
+            </gmd:CI_Contact>
+          </gmd:contactInfo>
+          <gmd:role>
+            <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="distributor" codeSpace="ISOTC211/19115">distributor</gmd:CI_RoleCode>
+          </gmd:role>
+        </gmd:CI_ResponsibleParty>
+      </gmd:pointOfContact>
+      <gmd:pointOfContact xlink:type="simple">
+        <gmd:CI_ResponsibleParty>
+          <gmd:organisationName>
+            <gco:CharacterString>群立科技股份有限公司</gco:CharacterString>
+          </gmd:organisationName>
+          <gmd:contactInfo xlink:type="simple">
+            <gmd:CI_Contact>
+              <gmd:phone xlink:type="simple">
+                <gmd:CI_Telephone>
+                  <gmd:voice>
+                    <gco:CharacterString>+886-4-27078899</gco:CharacterString>
+                  </gmd:voice>
+                  <gmd:facsimile>
+                    <gco:CharacterString>+886-4-27062899</gco:CharacterString>
+                  </gmd:facsimile>
+                </gmd:CI_Telephone>
+              </gmd:phone>
+              <gmd:address xlink:type="simple">
+                <gmd:CI_Address>
+                  <gmd:deliveryPoint>
+                    <gco:CharacterString>臺灣大道三段５４０號七樓之５</gco:CharacterString>
+                  </gmd:deliveryPoint>
+                  <gmd:city>
+                    <gco:CharacterString>臺中市西屯區</gco:CharacterString>
+                  </gmd:city>
+                  <gmd:postalCode>
+                    <gco:CharacterString>407603</gco:CharacterString>
+                  </gmd:postalCode>
+                  <gmd:country>
+                    <gco:CharacterString>中華民國</gco:CharacterString>
+                  </gmd:country>
+                  <gmd:electronicMailAddress>
+                    <gco:CharacterString>service@geoforce.com.tw</gco:CharacterString>
+                  </gmd:electronicMailAddress>
+                </gmd:CI_Address>
+              </gmd:address>
+            </gmd:CI_Contact>
+          </gmd:contactInfo>
+          <gmd:role>
+            <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="originator" codeSpace="ISOTC211/19115">originator</gmd:CI_RoleCode>
+          </gmd:role>
+        </gmd:CI_ResponsibleParty>
+      </gmd:pointOfContact>
+      <gmd:resourceMaintenance xlink:type="simple">
+        <gmd:MD_MaintenanceInformation>
+          <gmd:maintenanceAndUpdateFrequency>
+            <gmd:MD_MaintenanceFrequencyCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_MaintenanceFrequencyCode" codeListValue="irregular" codeSpace="ISOTC211/19115">irregular</gmd:MD_MaintenanceFrequencyCode>
+          </gmd:maintenanceAndUpdateFrequency>
+        </gmd:MD_MaintenanceInformation>
+      </gmd:resourceMaintenance>
+      <gmd:descriptiveKeywords xlink:type="simple">
+        <gmd:MD_Keywords>
+          <gmd:keyword>
+            <gco:CharacterString>國土利用現況調查</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>96201001</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>114年度國土利用現況調查成果更新</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>南投縣</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>高山</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>國土利用現況調查成果</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>土地利用</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>國土利用</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>五千分之一</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>地理資訊系統</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>GIS</gco:CharacterString>
+          </gmd:keyword>
+          <gmd:keyword>
+            <gco:CharacterString>數值資料檔</gco:CharacterString>
+          </gmd:keyword>
+        </gmd:MD_Keywords>
+      </gmd:descriptiveKeywords>
+      <gmd:resourceConstraints xlink:type="simple">
+        <gmd:MD_LegalConstraints>
+          <gmd:accessConstraints>
+            <gmd:MD_RestrictionCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_RestrictionCode" codeListValue="trademark" codeSpace="ISOTC211/19115">trademark</gmd:MD_RestrictionCode>
+          </gmd:accessConstraints>
+          <gmd:useConstraints>
+            <gmd:MD_RestrictionCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_RestrictionCode" codeListValue="trademark" codeSpace="ISOTC211/19115">trademark</gmd:MD_RestrictionCode>
+          </gmd:useConstraints>
+          <gmd:otherConstraints>
+            <gco:CharacterString>1.數值資料檔僅賦予使用權，申請單位非經內政部國土測繪中心同意，不得自行轉錄、轉售、贈與、租賃或質押，亦不得以附加或改良資料為由，作為任何其他商業用途。2.數值資料檔須由專人保管，不得任意移交、複製。非經國防部同意，不得攜出國外。3.申請單位應遵照「國家機密保護法」、「著作權法」與「行政機關電子資料流通實施要點」及其他相關法令規定使用數值資料檔。4.內政部國土測繪中心同仁自由瀏覽/申請下載;內政部（地政司）同仁自由瀏覽/申請下載;其他政府單位同仁自由瀏覽/須申購;其他學術單位同仁自由瀏覽/須申購;一般民眾自由瀏覽/須申購;民間企業自由瀏覽/須申購。</gco:CharacterString>
+          </gmd:otherConstraints>
+        </gmd:MD_LegalConstraints>
+      </gmd:resourceConstraints>
+      <gmd:resourceConstraints xlink:type="simple">
+        <gmd:MD_SecurityConstraints>
+          <gmd:classification>
+            <gmd:MD_ClassificationCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_ClassificationCode" codeListValue="unclassified" codeSpace="ISOTC211/19115">unclassified</gmd:MD_ClassificationCode>
+          </gmd:classification>
+        </gmd:MD_SecurityConstraints>
+      </gmd:resourceConstraints>
+      <gmd:spatialRepresentationType>
+        <gmd:MD_SpatialRepresentationTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_SpatialRepresentationTypeCode" codeListValue="vector" codeSpace="ISOTC211/19115">vector</gmd:MD_SpatialRepresentationTypeCode>
+      </gmd:spatialRepresentationType>
+      <gmd:spatialResolution>
+        <gmd:MD_Resolution>
+          <gmd:equivalentScale xlink:type="simple">
+            <gmd:MD_RepresentativeFraction>
+              <gmd:denominator>
+                <gco:Integer>5000</gco:Integer>
+              </gmd:denominator>
+            </gmd:MD_RepresentativeFraction>
+          </gmd:equivalentScale>
+        </gmd:MD_Resolution>
+      </gmd:spatialResolution>
+      <gmd:language>
+        <gco:CharacterString>chi</gco:CharacterString>
+      </gmd:language>
+      <gmd:characterSet>
+        <gmd:MD_CharacterSetCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_CharacterSetCode" codeListValue="utf8" codeSpace="ISOTC211/19115">utf8</gmd:MD_CharacterSetCode>
+      </gmd:characterSet>
+      <gmd:topicCategory>
+        <gmd:MD_TopicCategoryCode>imageryBaseMapsEarthCover</gmd:MD_TopicCategoryCode>
+      </gmd:topicCategory>
+      <gmd:extent xlink:type="simple">
+        <gmd:EX_Extent>
+          <gmd:geographicElement xlink:type="simple">
+            <gmd:EX_GeographicBoundingBox>
+              <gmd:westBoundLongitude>
+                <gco:Decimal>121</gco:Decimal>
+              </gmd:westBoundLongitude>
+              <gmd:eastBoundLongitude>
+                <gco:Decimal>121</gco:Decimal>
+              </gmd:eastBoundLongitude>
+              <gmd:southBoundLatitude>
+                <gco:Decimal>23</gco:Decimal>
+              </gmd:southBoundLatitude>
+              <gmd:northBoundLatitude>
+                <gco:Decimal>23</gco:Decimal>
+              </gmd:northBoundLatitude>
+            </gmd:EX_GeographicBoundingBox>
+          </gmd:geographicElement>
+        </gmd:EX_Extent>
+      </gmd:extent>
+    </gmd:MD_DataIdentification>
+  </gmd:identificationInfo>
+  <gmd:distributionInfo xlink:type="simple">
+    <gmd:MD_Distribution>
+      <gmd:distributionFormat xlink:type="simple">
+        <gmd:MD_Format>
+          <gmd:name>
+            <gco:CharacterString>電子資料_SHP</gco:CharacterString>
+          </gmd:name>
+          <gmd:version>
+            <gco:CharacterString>SHP</gco:CharacterString>
+          </gmd:version>
+        </gmd:MD_Format>
+      </gmd:distributionFormat>
+      <gmd:distributionFormat xlink:type="simple">
+        <gmd:MD_Format>
+          <gmd:name>
+            <gco:CharacterString>電子資料_GML</gco:CharacterString>
+          </gmd:name>
+          <gmd:version>
+            <gco:CharacterString>GML 3.2</gco:CharacterString>
+          </gmd:version>
+        </gmd:MD_Format>
+      </gmd:distributionFormat>
+      <gmd:distributor xlink:type="simple">
+        <gmd:MD_Distributor>
+          <gmd:distributorContact xlink:type="simple">
+            <gmd:CI_ResponsibleParty>
+              <gmd:organisationName>
+                <gco:CharacterString>內政部國土測繪中心圖資供應管理科</gco:CharacterString>
+              </gmd:organisationName>
+              <gmd:contactInfo xlink:type="simple">
+                <gmd:CI_Contact>
+                  <gmd:phone xlink:type="simple">
+                    <gmd:CI_Telephone>
+                      <gmd:voice>
+                        <gco:CharacterString>+886-4-22522966</gco:CharacterString>
+                      </gmd:voice>
+                      <gmd:facsimile>
+                        <gco:CharacterString>+886-4-22514536</gco:CharacterString>
+                      </gmd:facsimile>
+                    </gmd:CI_Telephone>
+                  </gmd:phone>
+                  <gmd:address xlink:type="simple">
+                    <gmd:CI_Address>
+                      <gmd:deliveryPoint>
+                        <gco:CharacterString>黎明路二段４９７號四樓</gco:CharacterString>
+                      </gmd:deliveryPoint>
+                      <gmd:city>
+                        <gco:CharacterString>臺中市南屯區</gco:CharacterString>
+                      </gmd:city>
+                      <gmd:postalCode>
+                        <gco:CharacterString>408281</gco:CharacterString>
+                      </gmd:postalCode>
+                      <gmd:country>
+                        <gco:CharacterString>中華民國</gco:CharacterString>
+                      </gmd:country>
+                      <gmd:electronicMailAddress>
+                        <gco:CharacterString>m5@mail.nlsc.gov.tw</gco:CharacterString>
+                      </gmd:electronicMailAddress>
+                    </gmd:CI_Address>
+                  </gmd:address>
+                  <gmd:onlineResource xlink:type="simple">
+                    <gmd:CI_OnlineResource>
+                      <gmd:linkage>
+                        <gmd:URL>https://whgis-nlsc.moi.gov.tw/</gmd:URL>
+                      </gmd:linkage>
+                    </gmd:CI_OnlineResource>
+                  </gmd:onlineResource>
+                </gmd:CI_Contact>
+              </gmd:contactInfo>
+              <gmd:role>
+                <gmd:CI_RoleCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_RoleCode" codeListValue="distributor" codeSpace="ISOTC211/19115">distributor</gmd:CI_RoleCode>
+              </gmd:role>
+            </gmd:CI_ResponsibleParty>
+          </gmd:distributorContact>
+          <gmd:distributionOrderProcess xlink:type="simple">
+            <gmd:MD_StandardOrderProcess>
+              <gmd:fees>
+                <gco:CharacterString>需收費</gco:CharacterString>
+              </gmd:fees>
+              <gmd:orderingInstructions>
+                <gco:CharacterString>依「國土測繪成果資料收費標準」及「內政部國土測繪中心測繪成果電子資料流通作業要點」規定辦理，或參考內政部國土測繪中心全球資訊網https://www.nlsc.gov.tw/-便民服務-測繪圖資供應之相關資訊。</gco:CharacterString>
+              </gmd:orderingInstructions>
+            </gmd:MD_StandardOrderProcess>
+          </gmd:distributionOrderProcess>
+        </gmd:MD_Distributor>
+      </gmd:distributor>
+    </gmd:MD_Distribution>
+  </gmd:distributionInfo>
+  <gmd:dataQualityInfo xlink:type="simple">
+    <gmd:DQ_DataQuality>
+      <gmd:scope xlink:type="simple">
+        <gmd:DQ_Scope>
+          <gmd:level>
+            <gmd:MD_ScopeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#MD_ScopeCode" codeListValue="dataset" codeSpace="ISOTC211/19115">dataset</gmd:MD_ScopeCode>
+          </gmd:level>
+        </gmd:DQ_Scope>
+      </gmd:scope>
+      <gmd:report xlink:type="simple">
+        <gmd:DQ_CompletenessCommission>
+          <gmd:nameOfMeasure>
+            <gco:CharacterString>國土利用現況調查成果檢查</gco:CharacterString>
+          </gmd:nameOfMeasure>
+          <gmd:measureDescription>
+            <gco:CharacterString>成果檢查方法為現場外業抽樣檢核及內業以IMAP程式對數值成果做全面性檢核。1.現場外業抽樣檢查數量為辦理圖幅數量之10%，檢查合格通過率為90%，檢查分類內容正確性。2.內業檢核為檢查數值成果屬性資料欄位完整性及分類內容正確性。3.查對數值成果及詮釋資料之種類、數量及品質。</gco:CharacterString>
+          </gmd:measureDescription>
+          <gmd:result xlink:type="simple">
+            <gmd:DQ_ConformanceResult>
+              <gmd:specification xlink:type="simple">
+                <gmd:CI_Citation>
+                  <gmd:title>
+                    <gco:CharacterString>國土利用現況調查成果檢查作業說明</gco:CharacterString>
+                  </gmd:title>
+                  <gmd:date xlink:type="simple">
+                    <gmd:CI_Date>
+                      <gmd:date>
+                        <gco:Date>2024-02-23</gco:Date>
+                      </gmd:date>
+                      <gmd:dateType>
+                        <gmd:CI_DateTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_DateTypeCode" codeListValue="publication" codeSpace="ISOTC211/19115">publication</gmd:CI_DateTypeCode>
+                      </gmd:dateType>
+                    </gmd:CI_Date>
+                  </gmd:date>
+                </gmd:CI_Citation>
+              </gmd:specification>
+              <gmd:explanation>
+                <gco:CharacterString>本成果業經查核通過，符合國土利用現況調查成果相關規範之要求。</gco:CharacterString>
+              </gmd:explanation>
+              <gmd:pass>
+                <gco:Boolean>true</gco:Boolean>
+              </gmd:pass>
+            </gmd:DQ_ConformanceResult>
+          </gmd:result>
+        </gmd:DQ_CompletenessCommission>
+      </gmd:report>
+      <gmd:report xlink:type="simple">
+        <gmd:DQ_AbsoluteExternalPositionalAccuracy>
+          <gmd:nameOfMeasure>
+            <gco:CharacterString>國土利用現況調查成果檢查</gco:CharacterString>
+          </gmd:nameOfMeasure>
+          <gmd:measureDescription>
+            <gco:CharacterString>1.圖幅四鄰接邊確實。2.所有圖元屬性依規定設定。3.面狀資料封閉填滿。4.圖形資料分類原則符合108年版土地利用分級分類系統表（陸域部分）。5.圖形資料具多邊形與位相關係資料。</gco:CharacterString>
+          </gmd:measureDescription>
+          <gmd:result xlink:type="simple">
+            <gmd:DQ_ConformanceResult>
+              <gmd:specification xlink:type="simple">
+                <gmd:CI_Citation>
+                  <gmd:title>
+                    <gco:CharacterString>國土利用現況調查成果檢查作業說明</gco:CharacterString>
+                  </gmd:title>
+                  <gmd:date xlink:type="simple">
+                    <gmd:CI_Date>
+                      <gmd:date>
+                        <gco:Date>2024-02-23</gco:Date>
+                      </gmd:date>
+                      <gmd:dateType>
+                        <gmd:CI_DateTypeCode codeList="http://www.isotc211.org/2005/resources/codeList.xml#CI_DateTypeCode" codeListValue="publication" codeSpace="ISOTC211/19115">publication</gmd:CI_DateTypeCode>
+                      </gmd:dateType>
+                    </gmd:CI_Date>
+                  </gmd:date>
+                </gmd:CI_Citation>
+              </gmd:specification>
+              <gmd:explanation>
+                <gco:CharacterString>本成果業經查核通過，符合國土利用現況調查成果相關規範之要求。</gco:CharacterString>
+              </gmd:explanation>
+              <gmd:pass>
+                <gco:Boolean>true</gco:Boolean>
+              </gmd:pass>
+            </gmd:DQ_ConformanceResult>
+          </gmd:result>
+        </gmd:DQ_AbsoluteExternalPositionalAccuracy>
+      </gmd:report>
+      <gmd:lineage xlink:type="simple">
+        <gmd:LI_Lineage>
+          <gmd:statement>
+            <gco:CharacterString>1.本資料成果係以外業調查及內業編輯數值成果等方式進行作業，所參考影像資料為地面解析度0.15公尺~1.50公尺之航照正射影像或衛星正射影像。作業時參考正射影像、地籍圖及臺灣通用電子地圖等圖資為調查底圖，並配合現場調查對土地利用情形進行分類。2.本資料部分成果係引用其他單位調查成果，並轉換對應至108年版土地利用分級分類系統表（陸域部分）。</gco:CharacterString>
+          </gmd:statement>
+        </gmd:LI_Lineage>
+      </gmd:lineage>
+    </gmd:DQ_DataQuality>
+  </gmd:dataQualityInfo>
+</gmd:MD_Metadata>
+"""
 
 
 def main():
